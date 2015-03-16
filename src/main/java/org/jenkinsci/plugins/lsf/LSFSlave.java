@@ -45,12 +45,12 @@ public class LSFSlave extends Slave {
     private static final Logger LOGGER = Logger.getLogger(LSFSlave.class
             .getName());
 
-    public LSFSlave(String name, 
-            String label, 
-            int numExecutors, 
-            String hostName, 
-            int port, 
-            String userName, 
+    public LSFSlave(String name,
+            String label,
+            int numExecutors,
+            String hostName,
+            int port,
+            String userName,
             Secret password) throws Descriptor.FormException, IOException {
         super(name,
                 "",
