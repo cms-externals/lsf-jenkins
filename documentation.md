@@ -5,7 +5,7 @@ This class extends the `BatchSystem` class and implements all of its methods. Th
 # LSFSlave.java
 This class represents the slave created by the cloud when a job with the appropriate label is run. It extends the `Slave` class which has most of its functionality. There is not much in the extended class.  The most important part of this extended class is the constructor which chooses the connection to the slave method (`SSHLauncher`), and the retention strategy (`LSFRetentionStrategy`), it also sets the label which specifies which jobs the slave will be able to execute.
 # LSFRetentionStrategy.java
-This class determines when an idle slave (a slave who isn`t doing any job) should be terminated (disconnected). It also takes care of terminating offline slaves. So it is a class which checks all slave computer status and determines if they should be terminated.
+This class determines when an idle slave (a slave who isn't doing any job) should be terminated (disconnected). It also takes care of terminating offline slaves. So it is a class which checks all slave computer status and determines if they should be terminated.
 # LSFCloud.java
 This class checks job labels and determines if a slave should be created. If the label matches the cloud's label the cloud creates a new slave and initiates its connection to the computer through SSH by giving it the credentials which are provided by the user when creating the cloud.
 
