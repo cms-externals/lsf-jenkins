@@ -58,7 +58,8 @@ public class LSFSlave extends Slave {
                 numExecutors,
                 Node.Mode.NORMAL,
                 label,
-                new SSHLauncher(hostName, port, userName, Secret.toString(password), "", ""),
+                new SSHLauncher(hostName, port, userName, 
+                        Secret.toString(password), "", ""),
                 new LSFRetentionStrategy(1),
                 Collections.<NodeProperty<?>>emptyList());
         LOGGER.log(Level.INFO, "Constructing LSF slave {0}", name);

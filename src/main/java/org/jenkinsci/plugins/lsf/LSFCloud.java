@@ -60,10 +60,12 @@ public class LSFCloud extends Cloud {
     private String username;
     private Secret password;
 
-    private static final Logger LOGGER = Logger.getLogger(LSFCloud.class.getName());
+    private static final Logger LOGGER = Logger
+            .getLogger(LSFCloud.class.getName());
 
     @DataBoundConstructor
-    public LSFCloud(String cloudName, String queueType, String label, String hostname, int port, String username, String password) {
+    public LSFCloud(String cloudName, String queueType, String label,
+            String hostname, int port, String username, String password) {
         super(cloudName);
         this.cloudName = cloudName;
         this.queueType = queueType;
@@ -82,10 +84,11 @@ public class LSFCloud extends Cloud {
      * @return
      */
     @Override
-    public Collection<NodeProvisioner.PlannedNode> provision(Label label, final int excessWorkload) {
+    public Collection<NodeProvisioner.PlannedNode> provision(Label label,
+            final int excessWorkload) {
         List<PlannedNode> list = new ArrayList<PlannedNode>();
-        list.add(new PlannedNode(this.getDisplayName(), Computer.threadPoolForRemoting
-                .submit(new Callable<Node>() {
+        list.add(new PlannedNode(this.getDisplayName(),
+                Computer.threadPoolForRemoting.submit(new Callable<Node>() {
                     @Override
                     public Node call() throws Exception {
                         LSFSlave s = doProvision(excessWorkload);
@@ -95,9 +98,11 @@ public class LSFCloud extends Cloud {
         return list;
     }
 
-    private LSFSlave doProvision(int numExecutors) throws Descriptor.FormException, IOException {
+    private LSFSlave doProvision(int numExecutors) 
+            throws Descriptor.FormException, IOException {
         String name = "LSF-jenkins-" + UUID.randomUUID().toString();
-        return new LSFSlave(name, this.label, numExecutors, hostname, port, username, password);
+        return new LSFSlave(name, this.label, numExecutors, hostname, port, 
+                username, password);
     }
 
     /**

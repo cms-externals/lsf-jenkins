@@ -66,17 +66,20 @@ public class LSFRetentionStrategy extends RetentionStrategy<SlaveComputer> {
         }
 
         if (computer.isOffline()) {
-            LOGGER.log(Level.INFO, "Disconnecting offline computer {0}", computer.getName());
+            LOGGER.log(Level.INFO, "Disconnecting offline computer {0}",
+                    computer.getName());
             ((LSFSlave) (computer.getNode())).terminate();
             return 1;
         }
 
         if (computer.isIdle()) {
             final long idleMilliseconds
-                    = System.currentTimeMillis() - computer.getIdleStartMilliseconds();
+                    = System.currentTimeMillis()
+                    - computer.getIdleStartMilliseconds();
 
             if (idleMilliseconds > MINUTES.toMillis(idleTerminationMinutes)) {
-                LOGGER.log(Level.INFO, "Disconnecting idle computer {0}", computer.getName());
+                LOGGER.log(Level.INFO, "Disconnecting idle computer {0}",
+                        computer.getName());
                 ((LSFSlave) (computer.getNode())).terminate();
             }
         }
@@ -88,7 +91,8 @@ public class LSFRetentionStrategy extends RetentionStrategy<SlaveComputer> {
         computer.connect(false);
     }
 
-    public static class DescriptorImpl extends Descriptor<RetentionStrategy<?>> {
+    public static class DescriptorImpl
+            extends Descriptor<RetentionStrategy<?>> {
 
         @Override
         public String getDisplayName() {

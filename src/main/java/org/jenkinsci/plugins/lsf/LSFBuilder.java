@@ -95,7 +95,9 @@ public class LSFBuilder extends Builder {
      * @param sendEmail
      */
     @DataBoundConstructor
-    public LSFBuilder(String job, String filesToDownload, String downloadDestination, String filesToSend, int checkFrequencyMinutes, boolean sendEmail) {
+    public LSFBuilder(String job, String filesToDownload,
+            String downloadDestination, String filesToSend,
+            int checkFrequencyMinutes, boolean sendEmail) {
         this.job = job;
         this.filesToDownload = filesToDownload;
         this.downloadDestination = downloadDestination;
@@ -140,88 +142,106 @@ public class LSFBuilder extends Builder {
      * @throws IOException
      */
     @Override
-    public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        BatchSystem batchSystem = new LSF(build, launcher, listener, COMMUNICATION_FILE);
-        CopyToMasterNotifier copyFileToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE, "", true, build.getRootDir().getAbsolutePath(), true);
+    public boolean perform(AbstractBuild<?, ?> build,
+            Launcher launcher, BuildListener listener)
+            throws InterruptedException, IOException {
+        BatchSystem batchSystem = new LSF(build, launcher,
+                listener, COMMUNICATION_FILE);
+        CopyToMasterNotifier copyFileToMaster
+                = new CopyToMasterNotifier(COMMUNICATION_FILE, "",
+                        true, build.getRootDir().getAbsolutePath(), true);
         String jobStatus = "";
         // randomly generated job script name
         String jobFileName = "JOB-" + UUID.randomUUID().toString();
-        // a fake listener for hiding output of some commands to make the console easier to read
-        BuildListenerAdapter fakeListener = new BuildListenerAdapter(TaskListener.NULL);
+        // a fake listener for hiding output of some 
+        // commands to make the console easier to read
+        BuildListenerAdapter fakeListener
+                = new BuildListenerAdapter(TaskListener.NULL);
         // gets the queue type from the cloud
         String queueType = getQueueType(build);
         // stores the current working directory of the slave
-        String currentWorkingDirectory = getCurrentWorkingDirectory(build, launcher, fakeListener);
-        // sends the selected files to the slave and prepares the commands to send files to LSF
-        String sendFilesShellCommands = sendFiles(build, launcher, listener, currentWorkingDirectory);
-        // stores and sends the file to the slave
-        sendJobToSlave(build, launcher, fakeListener, currentWorkingDirectory, sendFilesShellCommands, jobFileName);
+        String currentWorkingDirectory
+                = getCurrentWorkingDirectory(build, launcher, fakeListener);
+        // sends the selected files to the slave 
+        // and prepares the commands to send files to LSF
+        String sendFilesShellCommands
+                = sendFiles(build, launcher, listener, currentWorkingDirectory);
+        sendJobToSlave(build, launcher, fakeListener,
+                currentWorkingDirectory, sendFilesShellCommands, jobFileName);
         // sets the correct permission of the file for execution
         setPermissionOnJobFile(build, launcher, listener, jobFileName);
-        // submits the job
         String jobId = batchSystem.submitJob(jobFileName, sendEmail, queueType);
         try {
-            // command for counting lines in the result file (for tracking of job progress)
-            Shell countNumberOfLines = new Shell("#!/bin/bash +x\n wc -l " + PROGRESS_FILE + " > " + COMMUNICATION_FILE);
-            // used for output progress tracking (specifies how many lines to skip when printing job output file)
+            // command for counting lines in the result file 
+            //(for tracking of job progress)
+            Shell countNumberOfLines
+                    = new Shell("#!/bin/bash +x\n wc -l "
+                            + PROGRESS_FILE + " > " + COMMUNICATION_FILE);
+            // used for output progress tracking 
+            // (specifies how many lines to skip when printing job output file)
             int offset = 0;
-            // a flag which tracks if job has new output (if it needs to be printed)
+            // a flag which tracks if job has new output 
+            // (if it needs to be printed)
             boolean new_output = true;
-            // loops for checking the job's status and progress until it reaches an ending state
+            // loops for checking the job's status and progress until 
+            // it reaches an ending state
             while (!batchSystem.isEndStatus(jobStatus)) {
                 Thread.sleep(checkFrequencyMinutes * 60000);
-                // prints and stores the current state of the job
                 jobStatus = batchSystem.getJobStatus(jobId);
                 listener.getLogger().println("JOB STATUS: " + jobStatus);
-                batchSystem.proccessStatus(jobStatus);
-                // prints the progress of the job if it is in a running state
-                if (batchSystem.isRunningStatus(jobStatus)) {
-                    batchSystem.createJobProgressFile(jobId, PROGRESS_FILE);
-                    countNumberOfLines.perform(build, launcher, fakeListener);
-                    copyFileToMaster.perform(build, launcher, fakeListener);
-                    BufferedReader fileReader = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
-                    String first_word = fileReader.readLine();
-                    // checks if command didn't fail and the result file exists
-                    if (first_word != null) {
-                        first_word = first_word.split(" ")[0];
-                        if (!first_word.equals("wc:")) {
-                            int numberOfLines = Integer.parseInt(first_word);
-                            batchSystem.createFormattedRunningJobOutputFile(PROGRESS_FILE, offset, numberOfLines);
-                            copyFileToMaster.perform(build, launcher, fakeListener);
-                            String output = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
-                            if (new_output) {
-                                printJobOutput(listener, output);
-                                new_output = false;
-                            }
-                            if (offset < numberOfLines) {
-                                offset = numberOfLines;
-                                new_output = true;
-                            }
-                        }
-                    }
+                batchSystem.processStatus(jobStatus);
+                if (!batchSystem.isRunningStatus(jobStatus)) {
+                    continue;
+                }
+                batchSystem.createJobProgressFile(jobId, PROGRESS_FILE);
+                countNumberOfLines.perform(build, launcher, fakeListener);
+                copyFileToMaster.perform(build, launcher, fakeListener);
+                BufferedReader fileReader = new BufferedReader(
+                        new FileReader(build.getRootDir().getAbsolutePath() 
+                                + "/" + COMMUNICATION_FILE));
+                String first_word = fileReader.readLine();
+                // checks if command didn't fail and the result file exists
+                if (first_word == null) {
+                    continue;
+                }
+                first_word = first_word.split(" ")[0];
+                if (first_word.equals("wc:")) {
+                    continue;
+                }
+                int numberOfLines = Integer.parseInt(first_word);
+                batchSystem.createFormattedRunningJobOutputFile(
+                        PROGRESS_FILE, offset, numberOfLines);
+                copyFileToMaster.perform(build, launcher, fakeListener);
+                String output = FileUtils.readFileToString(
+                        new File(build.getRootDir().getAbsolutePath() 
+                                + "/" + COMMUNICATION_FILE));
+                if (new_output) {
+                    printJobOutput(listener, output);
+                    new_output = false;
+                }
+                if (offset < numberOfLines) {
+                    offset = numberOfLines;
+                    new_output = true;
                 }
             }
-            // prints the remaining job output
             batchSystem.createFinishedJobOutputFile(jobId, offset);
             copyFileToMaster.perform(build, launcher, fakeListener);
-            String output = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+            String output = FileUtils.readFileToString(
+                    new File(build.getRootDir().getAbsolutePath() 
+                            + "/" + COMMUNICATION_FILE));
             printJobOutput(listener, output);
-            // downloads the selected files after job completion (if there are any)
             downloadFiles(build, launcher, listener);
         } catch (InterruptedException e) {
-            // kills the job if it was interrupted
             batchSystem.killJob(jobId);
             jobStatus = "ABORTED";
         } finally {
             if (batchSystem.jobExitedWithErrors(jobStatus)) {
                 listener.getLogger().println();
-                // prints the errors
                 batchSystem.printErrorLog();
-                // prints the exit code if there is one
                 batchSystem.printExitCode(jobId);
             }
-            // cleans up the files
-            cleanUpFiles(build, launcher, fakeListener, currentWorkingDirectory, jobFileName, filesToDownload);
+            cleanUpFiles(build, launcher, fakeListener, 
+                    currentWorkingDirectory, jobFileName, filesToDownload);
         }
         return batchSystem.jobCompletedSuccessfully(jobStatus);
     }
@@ -233,10 +253,14 @@ public class LSFBuilder extends Builder {
      * @param output
      */
     protected void printJobOutput(BuildListener listener, String output) {
-        listener.getLogger().println("---------------------------------------------------JOB OUTPUT START---------------------------------------------------");
+        listener.getLogger().println("------------------------------------"
+                + "---------------JOB OUTPUT START------------------------"
+                + "---------------------------");
         listener.getLogger().println();
         listener.getLogger().println(output);
-        listener.getLogger().println("---------------------------------------------------JOB OUTPUT END-----------------------------------------------------");
+        listener.getLogger().println("------------------------------------"
+                + "---------------JOB OUTPUT END--------------------------"
+                + "---------------------------");
     }
 
     /**
@@ -244,9 +268,11 @@ public class LSFBuilder extends Builder {
      * @return queue type from the cloud
      */
     protected String getQueueType(AbstractBuild<?, ?> build) {
-        // finds the queue type by searching through the clouds with the associated label
+        // finds the queue type by searching through the clouds 
+        // with the associated label
         for (Cloud cloud : Jenkins.getInstance().clouds) {
-            if (cloud instanceof LSFCloud && cloud.canProvision(build.getProject().getAssignedLabel())) {
+            if (cloud instanceof LSFCloud && cloud.canProvision(
+                    build.getProject().getAssignedLabel())) {
                 return ((LSFCloud) cloud).getQueueType();
             }
         }
@@ -261,12 +287,18 @@ public class LSFBuilder extends Builder {
      * @throws InterruptedException
      * @throws IOException
      */
-    protected String getCurrentWorkingDirectory(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+    protected String getCurrentWorkingDirectory(AbstractBuild<?, ?> build, 
+            Launcher launcher, BuildListener listener) 
+            throws InterruptedException, IOException {
         Shell shell = new Shell("pwd > " + COMMUNICATION_FILE);
         shell.perform(build, launcher, listener);
-        CopyToMasterNotifier copyOutputToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE, "", true, build.getRootDir().getAbsolutePath(), true);
+        CopyToMasterNotifier copyOutputToMaster = 
+                new CopyToMasterNotifier(COMMUNICATION_FILE, "", true, 
+                        build.getRootDir().getAbsolutePath(), true);
         copyOutputToMaster.perform(build, launcher, listener);
-        BufferedReader br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+        BufferedReader br = new BufferedReader(
+                new FileReader(build.getRootDir().getAbsolutePath() 
+                        + "/" + COMMUNICATION_FILE));
         return br.readLine();
     }
 
@@ -281,19 +313,30 @@ public class LSFBuilder extends Builder {
      * @throws IOException
      * @throws InterruptedException
      */
-    protected String sendFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory) throws IOException, InterruptedException {
+    protected String sendFiles(AbstractBuild<?, ?> build, Launcher launcher, 
+            BuildListener listener, String currentWorkingDirectory) 
+            throws IOException, InterruptedException {
         String sendFilesShellCommands = "";
         String filesWithoutPaths = "";
         for (String file : filesToSend.split(",")) {
             File fileToSend = new File(file.trim());
-            sendFilesShellCommands = sendFilesShellCommands + "cp \"" + currentWorkingDirectory + "/" + fileToSend.getName() + "\" .\n";
-            Files.copy(fileToSend.toPath(), new File(build.getProject().getRootDir().getAbsolutePath() + "/workspace/" + fileToSend.getName()).toPath(), StandardCopyOption.REPLACE_EXISTING);
+            sendFilesShellCommands = sendFilesShellCommands + "cp \"" 
+                    + currentWorkingDirectory + "/" 
+                    + fileToSend.getName() + "\" .\n";
+            Files.copy(fileToSend.toPath(), 
+                    new File(build.getProject().getRootDir().getAbsolutePath() 
+                            + "/workspace/" + fileToSend.getName()).toPath(), 
+                    StandardCopyOption.REPLACE_EXISTING);
             filesWithoutPaths = fileToSend.getName() + "," + filesWithoutPaths;
         }
         for (String file : uploadedFiles.split(",")) {
-            sendFilesShellCommands = sendFilesShellCommands + "cp \"" + currentWorkingDirectory + "/" + file + "\" .\n";
+            sendFilesShellCommands = sendFilesShellCommands + "cp \"" 
+                    + currentWorkingDirectory + "/" + file + "\" .\n";
         }
-        CopyToSlaveBuildWrapper copyToSlave = new CopyToSlaveBuildWrapper(filesWithoutPaths + uploadedFiles, "", false, false, CopyToSlaveBuildWrapper.RELATIVE_TO_WORKSPACE, false);
+        CopyToSlaveBuildWrapper copyToSlave = 
+                new CopyToSlaveBuildWrapper(filesWithoutPaths + uploadedFiles, 
+                        "", false, false, 
+                        CopyToSlaveBuildWrapper.RELATIVE_TO_WORKSPACE, false);
         copyToSlave.setUp(build, launcher, listener);
         return sendFilesShellCommands;
     }
@@ -307,7 +350,8 @@ public class LSFBuilder extends Builder {
      * @throws InterruptedException
      * @throws IOException
      */
-    protected void downloadFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+    protected void downloadFiles(AbstractBuild<?, ?> build, Launcher launcher, 
+            BuildListener listener) throws InterruptedException, IOException {
         if (!filesToDownload.isEmpty()) {
             listener.getLogger().println();
             listener.getLogger().println("Downloading the selected files:");
@@ -317,7 +361,9 @@ public class LSFBuilder extends Builder {
                 downloadDestination = build.getRootDir().getAbsolutePath();
                 is_default = true;
             }
-            CopyToMasterNotifier copyFilesToMaster = new CopyToMasterNotifier(filesToDownload, "", true, downloadDestination, true);
+            CopyToMasterNotifier copyFilesToMaster = 
+                    new CopyToMasterNotifier(filesToDownload, "", 
+                            true, downloadDestination, true);
             copyFilesToMaster.perform(build, launcher, listener);
             // resets the download destination
             if (is_default) {
@@ -338,20 +384,28 @@ public class LSFBuilder extends Builder {
      * @throws IOException
      * @throws InterruptedException
      */
-    protected void sendJobToSlave(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory, String sendFilesShellCommands, String jobFileName) throws IOException, InterruptedException {
+    protected void sendJobToSlave(AbstractBuild<?, ?> build, Launcher launcher, 
+            BuildListener listener, String currentWorkingDirectory, 
+            String sendFilesShellCommands, String jobFileName) 
+            throws IOException, InterruptedException {
         // stores the job in a script file
-        PrintWriter writer = new PrintWriter(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + jobFileName, "UTF-8");
+        PrintWriter writer = 
+                new PrintWriter(Jenkins.getInstance().root.getAbsolutePath() 
+                        + "/userContent/" + jobFileName, "UTF-8");
         writer.print(sendFilesShellCommands + job + "\n");
 
         // inputs the files to download commands to the job
         if (!filesToDownload.isEmpty()) {
             for (String file : filesToDownload.split(",")) {
-                writer.print("cp \"" + file.trim() + "\" \"" + currentWorkingDirectory + "/\" > /dev/null\n");
+                writer.print("cp \"" + file.trim() + "\" \"" 
+                        + currentWorkingDirectory + "/\" > /dev/null\n");
             }
         }
         writer.close();
         // sends the job file to the slave
-        CopyToSlaveBuildWrapper copyToSlave = new CopyToSlaveBuildWrapper(jobFileName, "", false, false, CopyToSlaveBuildWrapper.RELATIVE_TO_HOME, false);
+        CopyToSlaveBuildWrapper copyToSlave = new CopyToSlaveBuildWrapper(
+                jobFileName, "", false, false, 
+                CopyToSlaveBuildWrapper.RELATIVE_TO_HOME, false);
         copyToSlave.setUp(build, launcher, listener);
     }
 
@@ -364,8 +418,11 @@ public class LSFBuilder extends Builder {
      * @param jobFileName
      * @throws InterruptedException
      */
-    protected void setPermissionOnJobFile(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String jobFileName) throws InterruptedException {
-        Shell shell = new Shell("#!/bin/bash +x\n chmod 755 " + jobFileName + " > /dev/null");
+    protected void setPermissionOnJobFile(AbstractBuild<?, ?> build, 
+            Launcher launcher, BuildListener listener, String jobFileName) 
+            throws InterruptedException {
+        Shell shell = new Shell("#!/bin/bash +x\n chmod 755 " 
+                + jobFileName + " > /dev/null");
         shell.perform(build, launcher, listener);
     }
 
@@ -380,13 +437,18 @@ public class LSFBuilder extends Builder {
      * @param filesWithoutPaths
      * @throws InterruptedException
      */
-    protected void cleanUpFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory, String jobFileName, String filesWithoutPaths) throws InterruptedException {
+    protected void cleanUpFiles(AbstractBuild<?, ?> build, Launcher launcher, 
+            BuildListener listener, String currentWorkingDirectory, 
+            String jobFileName, String filesWithoutPaths) 
+            throws InterruptedException {
         Shell shell = new Shell("rm -rf " + currentWorkingDirectory + "/*");
         shell.perform(build, launcher, listener);
-        File file = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + jobFileName);
+        File file = new File(Jenkins.getInstance().root.getAbsolutePath() 
+                + "/userContent/" + jobFileName);
         file.delete();
         for (String fileWithouPath : filesWithoutPaths.split(",")) {
-            File f = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + fileWithouPath);
+            File f = new File(Jenkins.getInstance().root.getAbsolutePath() 
+                    + "/userContent/" + fileWithouPath);
             f.delete();
         }
     }
@@ -413,33 +475,46 @@ public class LSFBuilder extends Builder {
             load();
         }
 
-        public void doStartUpload(StaplerRequest req, StaplerResponse rsp) throws IOException, ServletException {
+        public void doStartUpload(StaplerRequest req, StaplerResponse rsp) 
+                throws IOException, ServletException {
             rsp.setContentType("text/html");
-            req.getView(LSFBuilder.class, "startUpload.jelly").forward(req, rsp);
+            req.getView(LSFBuilder.class, 
+                    "startUpload.jelly").forward(req, rsp);
         }
 
-        public void doUploadFile(StaplerRequest req, StaplerResponse rsp, @QueryParameter String job) throws IOException, ServletException {
+        public void doUploadFile(StaplerRequest req, StaplerResponse rsp, 
+                @QueryParameter String job) 
+                throws IOException, ServletException {
             try {
-                AbstractProject prj = (AbstractProject) Jenkins.getInstance().getItemByFullName(job);
-                ServletFileUpload upload = new ServletFileUpload(new DiskFileItemFactory());
+                AbstractProject prj = (AbstractProject) 
+                        Jenkins.getInstance().getItemByFullName(job);
+                ServletFileUpload upload = 
+                        new ServletFileUpload(new DiskFileItemFactory());
                 FileItem fileItem = req.getFileItem("uploadedFile");
                 String fileName = Util.getFileName(fileItem.getName());
-                File f = new File(prj.getRootDir().getAbsolutePath() + "/workspace/" + fileName);
+                File f = new File(prj.getRootDir().getAbsolutePath() 
+                        + "/workspace/" + fileName);
                 fileItem.write(f);
                 fileItem.delete();
                 uploadedFiles.add(f);
                 save();
             } catch (FileNotFoundException ex) {
             } catch (Exception ex) {
-                Logger.getLogger(LSFBuilder.class.getName()).log(Level.SEVERE, null, ex);
+                Logger.getLogger(LSFBuilder.class.getName())
+                        .log(Level.SEVERE, null, ex);
             } finally {
                 rsp.setContentType("text/html");
-                String redirect = req.getRequestURL().toString().substring(0, req.getRequestURL().toString().lastIndexOf("/") + 1) + "startUpload" + "?job=" + job + "&files=" + getUploadedFileNames();
+                String redirect = req.getRequestURL().toString().substring(0, 
+                        req.getRequestURL().toString().lastIndexOf("/") + 1) 
+                        + "startUpload" + "?job=" + job + "&files=" 
+                        + getUploadedFileNames();
                 rsp.sendRedirect(redirect);
             }
         }
 
-        public void doDeleteFile(StaplerRequest req, StaplerResponse rsp, @QueryParameter String job, @QueryParameter String file) throws IOException, ServletException {
+        public void doDeleteFile(StaplerRequest req, StaplerResponse rsp, 
+                @QueryParameter String job, @QueryParameter String file) 
+                throws IOException, ServletException {
             for (File f : uploadedFiles) {
                 if (f.getName().equals(file)) {
                     f.delete();
@@ -449,7 +524,10 @@ public class LSFBuilder extends Builder {
             }
             save();
             rsp.setContentType("text/html");
-            String redirect = req.getRequestURL().toString().substring(0, req.getRequestURL().toString().lastIndexOf("/") + 1) + "startUpload" + "?job=" + job + "&files=" + getUploadedFileNames();
+            String redirect = req.getRequestURL().toString().substring(0, 
+                    req.getRequestURL().toString().lastIndexOf("/") + 1) 
+                    + "startUpload" + "?job=" + job + "&files=" 
+                    + getUploadedFileNames();
             rsp.sendRedirect(redirect);
         }
 
