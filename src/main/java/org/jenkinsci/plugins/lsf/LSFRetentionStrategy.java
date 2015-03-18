@@ -45,45 +45,47 @@ public class LSFRetentionStrategy extends RetentionStrategy<SlaveComputer> {
     public LSFRetentionStrategy(int idleTerminationMinutes) {
         this.idleTerminationMinutes = idleTerminationMinutes;
     }
-    
+
     /**
-     * Checks if the slave computer needs to be terminated and terminates if needed
-     * @param c
-     * @return 
+     * Checks if the slave computer needs to be terminated and terminates if
+     * needed
+     *
+     * @param computer
+     * @return
      */
     @Override
-    public long check(SlaveComputer c) {
+    public long check(SlaveComputer computer) {
 
-        if (c.getNode() == null) {
+        if (computer.getNode() == null) {
             return 1;
         }
-        
-        if ((System.currentTimeMillis() - c.getConnectTime())
+
+        if ((System.currentTimeMillis() - computer.getConnectTime())
                 < MINUTES.toMillis(idleTerminationMinutes)) {
             return 1;
         }
 
-        if (c.isOffline()) {
-            LOGGER.log(Level.INFO, "Disconnecting offline computer {0}", c.getName());
-            ((LSFSlave) (c.getNode())).terminate();
+        if (computer.isOffline()) {
+            LOGGER.log(Level.INFO, "Disconnecting offline computer {0}", computer.getName());
+            ((LSFSlave) (computer.getNode())).terminate();
             return 1;
         }
 
-        if (c.isIdle()) {
+        if (computer.isIdle()) {
             final long idleMilliseconds
-                    = System.currentTimeMillis() - c.getIdleStartMilliseconds();
+                    = System.currentTimeMillis() - computer.getIdleStartMilliseconds();
 
             if (idleMilliseconds > MINUTES.toMillis(idleTerminationMinutes)) {
-                LOGGER.log(Level.INFO, "Disconnecting idle computer {0}", c.getName());
-                ((LSFSlave) (c.getNode())).terminate();
+                LOGGER.log(Level.INFO, "Disconnecting idle computer {0}", computer.getName());
+                ((LSFSlave) (computer.getNode())).terminate();
             }
         }
         return 1;
     }
 
     @Override
-    public void start(SlaveComputer c) {
-        c.connect(false);
+    public void start(SlaveComputer computer) {
+        computer.connect(false);
     }
 
     public static class DescriptorImpl extends Descriptor<RetentionStrategy<?>> {

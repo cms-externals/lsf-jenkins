@@ -46,7 +46,7 @@ import org.kohsuke.stapler.DataBoundConstructor;
  * @author Laisvydas Skurevicius
  */
 public class LSFCloud extends Cloud {
-    
+
     // The name of the cloud
     private String cloudName;
     // LSF queue type
@@ -76,21 +76,22 @@ public class LSFCloud extends Cloud {
 
     /**
      * Creates a slave when there is a running job with an appropriate label
+     *
      * @param label
      * @param excessWorkload
-     * @return 
+     * @return
      */
     @Override
     public Collection<NodeProvisioner.PlannedNode> provision(Label label, final int excessWorkload) {
         List<PlannedNode> list = new ArrayList<PlannedNode>();
-            list.add(new PlannedNode(this.getDisplayName(), Computer.threadPoolForRemoting
-                    .submit(new Callable<Node>() {
-                        @Override
-                        public Node call() throws Exception {
-                            LSFSlave s = doProvision(excessWorkload);
-                            return s;
-                        }
-                    }), excessWorkload));
+        list.add(new PlannedNode(this.getDisplayName(), Computer.threadPoolForRemoting
+                .submit(new Callable<Node>() {
+                    @Override
+                    public Node call() throws Exception {
+                        LSFSlave s = doProvision(excessWorkload);
+                        return s;
+                    }
+                }), excessWorkload));
         return list;
     }
 
@@ -100,9 +101,11 @@ public class LSFCloud extends Cloud {
     }
 
     /**
-     * Checks if a jobs label matches the clouds label and determines if a slave should be created
+     * Checks if a jobs label matches the clouds label and determines if a slave
+     * should be created
+     *
      * @param label
-     * @return 
+     * @return
      */
     @Override
     public boolean canProvision(Label label) {

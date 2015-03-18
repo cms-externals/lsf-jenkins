@@ -67,18 +67,6 @@ import org.kohsuke.stapler.StaplerResponse;
  */
 public class LSFBuilder extends Builder {
 
-    private static final Set ENDING_STATES = new HashSet();
-
-    static {
-        ENDING_STATES.add("DONE");
-        ENDING_STATES.add("EXIT");
-        /*
-         ENDING_STATES.add("PSUS");
-         ENDING_STATES.add("USUS");
-         ENDING_STATES.add("SSUS");
-         */
-    }
-
     // the batch job script
     private String job;
     // the files that need to be downloaded after job completion
@@ -93,14 +81,18 @@ public class LSFBuilder extends Builder {
     private String uploadedFiles = getUploadedFiles();
     // configuration for checking if email should be sent
     private boolean sendEmail = false;
+    // file name for the communication between master and slave
+    private static final String COMMUNICATION_FILE = "output";
+    // name of the file where the running job output is saved
+    private static final String PROGRESS_FILE = "jobProgress";
 
     /**
-     *
      * @param job
      * @param filesToDownload
      * @param downloadDestination
      * @param filesToSend
      * @param checkFrequencyMinutes
+     * @param sendEmail
      */
     @DataBoundConstructor
     public LSFBuilder(String job, String filesToDownload, String downloadDestination, String filesToSend, int checkFrequencyMinutes, boolean sendEmail) {
@@ -136,7 +128,6 @@ public class LSFBuilder extends Builder {
     public boolean getSendEmail() {
         return sendEmail;
     }
-    
 
     /**
      * This is where the interaction between Jenkins and LSF happens.
@@ -150,32 +141,147 @@ public class LSFBuilder extends Builder {
      */
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-
+        BatchSystem batchSystem = new LSF(build, launcher, listener, COMMUNICATION_FILE);
+        CopyToMasterNotifier copyFileToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE, "", true, build.getRootDir().getAbsolutePath(), true);
         String jobStatus = "";
-        // the default queue type is 8nm
-        String queueType = "8nm";
         // randomly generated job script name
         String jobFileName = "JOB-" + UUID.randomUUID().toString();
         // a fake listener for hiding output of some commands to make the console easier to read
         BuildListenerAdapter fakeListener = new BuildListenerAdapter(TaskListener.NULL);
+        // gets the queue type from the cloud
+        String queueType = getQueueType(build);
+        // stores the current working directory of the slave
+        String currentWorkingDirectory = getCurrentWorkingDirectory(build, launcher, fakeListener);
+        // sends the selected files to the slave and prepares the commands to send files to LSF
+        String sendFilesShellCommands = sendFiles(build, launcher, listener, currentWorkingDirectory);
+        // stores and sends the file to the slave
+        sendJobToSlave(build, launcher, fakeListener, currentWorkingDirectory, sendFilesShellCommands, jobFileName);
+        // sets the correct permission of the file for execution
+        setPermissionOnJobFile(build, launcher, listener, jobFileName);
+        // submits the job
+        String jobId = batchSystem.submitJob(jobFileName, sendEmail, queueType);
+        try {
+            // command for counting lines in the result file (for tracking of job progress)
+            Shell countNumberOfLines = new Shell("#!/bin/bash +x\n wc -l " + PROGRESS_FILE + " > " + COMMUNICATION_FILE);
+            // used for output progress tracking (specifies how many lines to skip when printing job output file)
+            int offset = 0;
+            // a flag which tracks if job has new output (if it needs to be printed)
+            boolean new_output = true;
+            // loops for checking the job's status and progress until it reaches an ending state
+            while (!batchSystem.isEndStatus(jobStatus)) {
+                Thread.sleep(checkFrequencyMinutes * 60000);
+                // prints and stores the current state of the job
+                jobStatus = batchSystem.getJobStatus(jobId);
+                listener.getLogger().println("JOB STATUS: " + jobStatus);
+                batchSystem.proccessStatus(jobStatus);
+                // prints the progress of the job if it is in a running state
+                if (batchSystem.isRunningStatus(jobStatus)) {
+                    batchSystem.createJobProgressFile(jobId, PROGRESS_FILE);
+                    countNumberOfLines.perform(build, launcher, fakeListener);
+                    copyFileToMaster.perform(build, launcher, fakeListener);
+                    BufferedReader fileReader = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+                    String first_word = fileReader.readLine();
+                    // checks if command didn't fail and the result file exists
+                    if (first_word != null) {
+                        first_word = first_word.split(" ")[0];
+                        if (!first_word.equals("wc:")) {
+                            int numberOfLines = Integer.parseInt(first_word);
+                            batchSystem.createFormattedRunningJobOutputFile(PROGRESS_FILE, offset, numberOfLines);
+                            copyFileToMaster.perform(build, launcher, fakeListener);
+                            String output = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+                            if (new_output) {
+                                printJobOutput(listener, output);
+                                new_output = false;
+                            }
+                            if (offset < numberOfLines) {
+                                offset = numberOfLines;
+                                new_output = true;
+                            }
+                        }
+                    }
+                }
+            }
+            // prints the remaining job output
+            batchSystem.createFinishedJobOutputFile(jobId, offset);
+            copyFileToMaster.perform(build, launcher, fakeListener);
+            String output = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+            printJobOutput(listener, output);
+            // downloads the selected files after job completion (if there are any)
+            downloadFiles(build, launcher, listener);
+        } catch (InterruptedException e) {
+            // kills the job if it was interrupted
+            batchSystem.killJob(jobId);
+            jobStatus = "ABORTED";
+        } finally {
+            if (batchSystem.jobExitedWithErrors(jobStatus)) {
+                listener.getLogger().println();
+                // prints the errors
+                batchSystem.printErrorLog();
+                // prints the exit code if there is one
+                batchSystem.printExitCode(jobId);
+            }
+            // cleans up the files
+            cleanUpFiles(build, launcher, fakeListener, currentWorkingDirectory, jobFileName, filesToDownload);
+        }
+        return batchSystem.jobCompletedSuccessfully(jobStatus);
+    }
 
+    /**
+     * prints the given output to console
+     *
+     * @param listener
+     * @param output
+     */
+    protected void printJobOutput(BuildListener listener, String output) {
+        listener.getLogger().println("---------------------------------------------------JOB OUTPUT START---------------------------------------------------");
+        listener.getLogger().println();
+        listener.getLogger().println(output);
+        listener.getLogger().println("---------------------------------------------------JOB OUTPUT END-----------------------------------------------------");
+    }
+
+    /**
+     * @param build
+     * @return queue type from the cloud
+     */
+    protected String getQueueType(AbstractBuild<?, ?> build) {
         // finds the queue type by searching through the clouds with the associated label
         for (Cloud cloud : Jenkins.getInstance().clouds) {
             if (cloud instanceof LSFCloud && cloud.canProvision(build.getProject().getAssignedLabel())) {
-                queueType = ((LSFCloud) cloud).getQueueType();
-                break;
+                return ((LSFCloud) cloud).getQueueType();
             }
         }
+        return null;
+    }
 
-        // stores the current working directory
-        Shell shell = new Shell("pwd > output");
-        shell.perform(build, launcher, fakeListener);
-        CopyToMasterNotifier copyOutputToMaster = new CopyToMasterNotifier("output", "", true, build.getRootDir().getAbsolutePath(), true);
-        copyOutputToMaster.perform(build, launcher, fakeListener);
-        BufferedReader br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/output"));
-        String currentWorkingDirectory = br.readLine();
+    /**
+     * @param build
+     * @param launcher
+     * @param listener
+     * @return current working directory in the slave machine
+     * @throws InterruptedException
+     * @throws IOException
+     */
+    protected String getCurrentWorkingDirectory(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        Shell shell = new Shell("pwd > " + COMMUNICATION_FILE);
+        shell.perform(build, launcher, listener);
+        CopyToMasterNotifier copyOutputToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE, "", true, build.getRootDir().getAbsolutePath(), true);
+        copyOutputToMaster.perform(build, launcher, listener);
+        BufferedReader br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+        return br.readLine();
+    }
 
-        // sends the selected files to the slave and prepares the commands to send files to LSF
+    /**
+     * sends the selected files to the slave machine
+     *
+     * @param build
+     * @param launcher
+     * @param listener
+     * @param currentWorkingDirectory
+     * @return shell commands for sending files to batch system
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    protected String sendFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory) throws IOException, InterruptedException {
         String sendFilesShellCommands = "";
         String filesWithoutPaths = "";
         for (String file : filesToSend.split(",")) {
@@ -189,7 +295,50 @@ public class LSFBuilder extends Builder {
         }
         CopyToSlaveBuildWrapper copyToSlave = new CopyToSlaveBuildWrapper(filesWithoutPaths + uploadedFiles, "", false, false, CopyToSlaveBuildWrapper.RELATIVE_TO_WORKSPACE, false);
         copyToSlave.setUp(build, launcher, listener);
+        return sendFilesShellCommands;
+    }
 
+    /**
+     * downloads the selected files from slave to master
+     *
+     * @param build
+     * @param launcher
+     * @param listener
+     * @throws InterruptedException
+     * @throws IOException
+     */
+    protected void downloadFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        if (!filesToDownload.isEmpty()) {
+            listener.getLogger().println();
+            listener.getLogger().println("Downloading the selected files:");
+            boolean is_default = false;
+            // default destination is the build directory
+            if (downloadDestination.isEmpty()) {
+                downloadDestination = build.getRootDir().getAbsolutePath();
+                is_default = true;
+            }
+            CopyToMasterNotifier copyFilesToMaster = new CopyToMasterNotifier(filesToDownload, "", true, downloadDestination, true);
+            copyFilesToMaster.perform(build, launcher, listener);
+            // resets the download destination
+            if (is_default) {
+                downloadDestination = "";
+            }
+        }
+    }
+
+    /**
+     * sends the job script file to slave
+     *
+     * @param build
+     * @param launcher
+     * @param listener
+     * @param currentWorkingDirectory
+     * @param sendFilesShellCommands
+     * @param jobFileName
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    protected void sendJobToSlave(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory, String sendFilesShellCommands, String jobFileName) throws IOException, InterruptedException {
         // stores the job in a script file
         PrintWriter writer = new PrintWriter(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + jobFileName, "UTF-8");
         writer.print(sendFilesShellCommands + job + "\n");
@@ -201,167 +350,45 @@ public class LSFBuilder extends Builder {
             }
         }
         writer.close();
-
         // sends the job file to the slave
-        copyToSlave = new CopyToSlaveBuildWrapper(jobFileName, "", false, false, CopyToSlaveBuildWrapper.RELATIVE_TO_HOME, false);
-        copyToSlave.setUp(build, launcher, fakeListener);
+        CopyToSlaveBuildWrapper copyToSlave = new CopyToSlaveBuildWrapper(jobFileName, "", false, false, CopyToSlaveBuildWrapper.RELATIVE_TO_HOME, false);
+        copyToSlave.setUp(build, launcher, listener);
+    }
 
-        // sets the correct permission of the file for execution
-        shell = new Shell("#!/bin/bash +x\n chmod 755 " + jobFileName + " > /dev/null");
-        shell.perform(build, launcher, fakeListener);
-        
-        // checks if email notifications should be sent and configures the command
-        String emailConfiguration = "";
-        if (!getSendEmail()) {
-            emailConfiguration = "LSB_JOB_REPORT_MAIL=N ";
-        }
-        // submits the job to LSF
-        shell = new Shell("#!/bin/bash +x\n" + emailConfiguration + "bsub -q " + queueType + " -e \"errorLog\" " + jobFileName + " | tee output");
+    /**
+     * sets the correct permission on the job file
+     *
+     * @param build
+     * @param launcher
+     * @param listener
+     * @param jobFileName
+     * @throws InterruptedException
+     */
+    protected void setPermissionOnJobFile(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String jobFileName) throws InterruptedException {
+        Shell shell = new Shell("#!/bin/bash +x\n chmod 755 " + jobFileName + " > /dev/null");
         shell.perform(build, launcher, listener);
+    }
 
-        // stores the job id
-        copyOutputToMaster.perform(build, launcher, fakeListener);
-        br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/output"));
-        String jobId = br.readLine();
-        jobId = jobId.substring(jobId.indexOf('<', 0) + 1, jobId.indexOf('>', 0));
-
-        try {
-            shell = new Shell("#!/bin/bash +x\n bjobs " + jobId);
-            shell.perform(build, launcher, listener);
-
-            // initializes the shell commands for job status and result
-            // command for checking the status of the job
-            shell = new Shell("#!/bin/bash +x\n bjobs " + jobId + " > output");
-            // command for getting the ouput of a running job
-            Shell bpeek = new Shell("#!/bin/bash +x\n bpeek " + jobId + " > result");
-            // command for counting lines in the result file (for tracking of job progress)
-            Shell countNumberOfLines = new Shell("#!/bin/bash +x\n wc -l result > output");
-            // used for output progress tracking (specifies how many lines to skip when printing job output file)
-            int offset = 2;
-            // a flag which tracks if job has new output (if it needs to be printed)
-            boolean new_output = true;
-            Shell result;
-
-            // loops for checking the job's status and progress until it reaches an ending state
-            while (!ENDING_STATES.contains(jobStatus)) {
-                Thread.sleep(checkFrequencyMinutes * 60000);
-
-                // prints and stores the current state of the job
-                shell.perform(build, launcher, fakeListener);
-                copyOutputToMaster.perform(build, launcher, fakeListener);
-                br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/output"));
-                br.readLine();
-                jobStatus = br.readLine().trim().split(" ")[2];
-                listener.getLogger().println("JOB STATUS: " + jobStatus);
-                if (jobStatus.equals("PEND")) {
-                    listener.getLogger().println("Waiting in a queue for scheduling and dispatch.");
-                } // prints the progress of the job if it is in a running state
-                else if (jobStatus.equals("RUN")) {
-                    listener.getLogger().println("Dispatched to a host and running.");
-                    bpeek.perform(build, launcher, fakeListener);
-                    countNumberOfLines.perform(build, launcher, fakeListener);
-                    copyOutputToMaster.perform(build, launcher, fakeListener);
-                    br = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/output"));
-                    String first_word = br.readLine();
-                    // checks if command didn't fail and the result file exists
-                    if (first_word != null) {
-                        first_word = first_word.split(" ")[0];
-                        if (!first_word.equals("wc:")) {
-                            result = new Shell("#!/bin/bash +x\n tail -n+" + offset + " result > output");
-                            result.perform(build, launcher, fakeListener);
-                            copyOutputToMaster.perform(build, launcher, fakeListener);
-                            String output = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/output"));
-                            if (new_output && output.lastIndexOf("\n<< output from stderr >>") != -1) {
-                                listener.getLogger().println("---------------------------------------------------JOB OUTPUT START---------------------------------------------------");
-                                listener.getLogger().println();
-                                listener.getLogger().println(output.substring(0, output.lastIndexOf("\n<< output from stderr >>")));
-                                listener.getLogger().println("---------------------------------------------------JOB OUTPUT END-----------------------------------------------------");
-                                new_output = false;
-                            }
-                            if (offset < Integer.parseInt(first_word) - 1) {
-                                offset = Integer.parseInt(first_word) - 1;
-                                new_output = true;
-                            }
-                        }
-                    }
-                } else if (jobStatus.equals("DONE")) {
-                    listener.getLogger().println("Finished normally with zero exit value.");
-                } else if (jobStatus.equals("EXIT")) {
-                    listener.getLogger().println("Finished with non-zero exit value.");
-                } else if (jobStatus.equals("PSUS")) {
-                    listener.getLogger().println("Suspended while pending.");
-                } else if (jobStatus.equals("USUS")) {
-                    listener.getLogger().println("Suspended by user.");
-                } else if (jobStatus.equals("SSUS")) {
-                    listener.getLogger().println("Suspended by the LSF system.");
-                } else if (jobStatus.equals("WAIT")) {
-                    listener.getLogger().println("Members of a chunk job that are waiting to run.");
-                }
-
-            }
-
-            // prints the remaining job output
-            result = new Shell("#!/bin/bash +x\n tail -n+" + (offset - 1) + " LSFJOB_" + jobId + "/STDOUT");
-            listener.getLogger().println("---------------------------------------------------JOB OUTPUT START---------------------------------------------------");
-            listener.getLogger().println();
-            result.perform(build, launcher, listener);
-            listener.getLogger().println();
-            listener.getLogger().println("---------------------------------------------------JOB OUTPUT END-----------------------------------------------------");
-            // downloads the selected files after job completion (if there are any)
-            if (!filesToDownload.isEmpty()) {
-                listener.getLogger().println();
-                listener.getLogger().println("Downloading the selected files:");
-                boolean is_default = false;
-                // default destination is the build directory
-                if (downloadDestination.isEmpty()) {
-                    downloadDestination = build.getRootDir().getAbsolutePath();
-                    is_default = true;
-                }
-                CopyToMasterNotifier copyFilesToMaster = new CopyToMasterNotifier(filesToDownload, "", true, downloadDestination, true);
-                copyFilesToMaster.perform(build, launcher, listener);
-                // resets the download destination
-                if (is_default) {
-                    downloadDestination = "";
-                }
-            }
-        } catch (InterruptedException e) {
-            // kills the job if it was interrupted
-            shell = new Shell("#!/bin/bash +x\n bkill " + jobId);
-            shell.perform(build, launcher, listener);
-            jobStatus = "ABORTED";
-        } finally {
-
-            // Outputs the error log if the job exited
-            if (jobStatus.equals("EXIT")) {
-                listener.getLogger().println();
-                listener.getLogger().println("Job exited with following errors:");
-                shell = new Shell("#!/bin/bash +x\n cat errorLog");
-                shell.perform(build, launcher, listener);
-
-                // prints the exit code if there is one
-                shell = new Shell("#!/bin/bash +x\n bjobs -l " + jobId + " > output");
-                shell.perform(build, launcher, fakeListener);
-                copyOutputToMaster.perform(build, launcher, fakeListener);
-                String exitCode = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/output"));
-                if (exitCode.contains("Exited with exit code ")) {
-                    listener.getLogger().println();
-                    exitCode = exitCode.substring(exitCode.indexOf("Exited with exit code "), exitCode.length());
-                    exitCode = exitCode.substring(0, exitCode.indexOf(".") + 1);
-                    listener.getLogger().println(exitCode);
-                }
-            }
-
-            // cleans up the files
-            shell = new Shell("rm -rf " + currentWorkingDirectory + "/*");
-            shell.perform(build, launcher, fakeListener);
-            File file = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + jobFileName);
-            file.delete();
-            for (String fileWithouPath : filesWithoutPaths.split(",")) {
-                File f = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + fileWithouPath);
-                f.delete();
-            }
+    /**
+     * cleans up the temporary files in the master and the slave
+     *
+     * @param build
+     * @param launcher
+     * @param listener
+     * @param currentWorkingDirectory
+     * @param jobFileName
+     * @param filesWithoutPaths
+     * @throws InterruptedException
+     */
+    protected void cleanUpFiles(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String currentWorkingDirectory, String jobFileName, String filesWithoutPaths) throws InterruptedException {
+        Shell shell = new Shell("rm -rf " + currentWorkingDirectory + "/*");
+        shell.perform(build, launcher, listener);
+        File file = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + jobFileName);
+        file.delete();
+        for (String fileWithouPath : filesWithoutPaths.split(",")) {
+            File f = new File(Jenkins.getInstance().root.getAbsolutePath() + "/userContent/" + fileWithouPath);
+            f.delete();
         }
-        return jobStatus.equals("DONE");
     }
 
     @Override
@@ -381,7 +408,7 @@ public class LSFBuilder extends Builder {
         public Set<File> getUploadedFiles() {
             return uploadedFiles;
         }
-        
+
         public DescriptorImpl() {
             load();
         }
@@ -402,11 +429,10 @@ public class LSFBuilder extends Builder {
                 fileItem.delete();
                 uploadedFiles.add(f);
                 save();
-            } catch (FileNotFoundException ex) {    
+            } catch (FileNotFoundException ex) {
             } catch (Exception ex) {
                 Logger.getLogger(LSFBuilder.class.getName()).log(Level.SEVERE, null, ex);
-            }
-            finally {
+            } finally {
                 rsp.setContentType("text/html");
                 String redirect = req.getRequestURL().toString().substring(0, req.getRequestURL().toString().lastIndexOf("/") + 1) + "startUpload" + "?job=" + job + "&files=" + getUploadedFileNames();
                 rsp.sendRedirect(redirect);
