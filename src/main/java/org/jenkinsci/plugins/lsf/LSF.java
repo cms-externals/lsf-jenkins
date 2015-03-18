@@ -50,14 +50,17 @@ public class LSF extends BatchSystem {
         ENDING_STATES.add("EXIT");
     }
 
-    private static final BuildListenerAdapter fakeListener = new BuildListenerAdapter(TaskListener.NULL);
+    private static final BuildListenerAdapter fakeListener
+            = new BuildListenerAdapter(TaskListener.NULL);
 
-    public LSF(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, String COMMUNICATION_FILE) {
+    public LSF(AbstractBuild<?, ?> build, Launcher launcher,
+            BuildListener listener, String COMMUNICATION_FILE) {
         super(build, launcher, listener, COMMUNICATION_FILE);
     }
 
     @Override
-    public String submitJob(String jobFileName, boolean sendEmail, String queueType) throws InterruptedException, IOException {
+    public String submitJob(String jobFileName, boolean sendEmail,
+            String queueType) throws InterruptedException, IOException {
 
         // checks if email notifications should be sent and configures the command
         String emailConfiguration = "";
@@ -65,23 +68,32 @@ public class LSF extends BatchSystem {
             emailConfiguration = "LSB_JOB_REPORT_MAIL=N ";
         }
         // submits the job to LSF
-        Shell shell = new Shell("#!/bin/bash +x\n" + emailConfiguration + "bsub -q " + queueType + " -e \"errorLog\" " + jobFileName + " | tee " + COMMUNICATION_FILE);
+        Shell shell = new Shell("#!/bin/bash +x\n" + emailConfiguration
+                + "bsub -q " + queueType + " -e \"errorLog\" "
+                + jobFileName + " | tee " + COMMUNICATION_FILE);
         shell.perform(build, launcher, listener);
 
         // stores the job id
         copyFileToMaster.perform(build, launcher, fakeListener);
-        BufferedReader fileReader = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+        BufferedReader fileReader = new BufferedReader(
+                new FileReader(build.getRootDir().getAbsolutePath()
+                        + "/" + COMMUNICATION_FILE));
         String jobId = fileReader.readLine();
-        jobId = jobId.substring(jobId.indexOf('<', 0) + 1, jobId.indexOf('>', 0));
+        jobId = jobId.substring(jobId.indexOf('<', 0)
+                + 1, jobId.indexOf('>', 0));
         return jobId;
     }
 
     @Override
-    public String getJobStatus(String jobId) throws IOException, InterruptedException {
-        Shell shell = new Shell("#!/bin/bash +x\n bjobs " + jobId + " > " + COMMUNICATION_FILE);
+    public String getJobStatus(String jobId)
+            throws IOException, InterruptedException {
+        Shell shell = new Shell("#!/bin/bash +x\n bjobs " + jobId + " > "
+                + COMMUNICATION_FILE);
         shell.perform(build, launcher, fakeListener);
         copyFileToMaster.perform(build, launcher, fakeListener);
-        BufferedReader fileReader = new BufferedReader(new FileReader(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+        BufferedReader fileReader = new BufferedReader(
+                new FileReader(build.getRootDir().getAbsolutePath()
+                        + "/" + COMMUNICATION_FILE));
         fileReader.readLine();
         return fileReader.readLine().trim().split(" ")[2];
     }
@@ -93,13 +105,15 @@ public class LSF extends BatchSystem {
     }
 
     @Override
-    public void proccessStatus(String jobStatus) {
+    public void processStatus(String jobStatus) {
         if (jobStatus.equals("PEND")) {
-            listener.getLogger().println("Waiting in a queue for scheduling and dispatch.");
+            listener.getLogger().println("Waiting in a queue for scheduling "
+                    + "and dispatch.");
         } else if (jobStatus.equals("RUN")) {
             listener.getLogger().println("Dispatched to a host and running.");
         } else if (jobStatus.equals("DONE")) {
-            listener.getLogger().println("Finished normally with zero exit value.");
+            listener.getLogger().println("Finished normally with zero "
+                    + "exit value.");
         } else if (jobStatus.equals("EXIT")) {
             listener.getLogger().println("Finished with non-zero exit value.");
         } else if (jobStatus.equals("PSUS")) {
@@ -109,7 +123,10 @@ public class LSF extends BatchSystem {
         } else if (jobStatus.equals("SSUS")) {
             listener.getLogger().println("Suspended by the LSF system.");
         } else if (jobStatus.equals("WAIT")) {
-            listener.getLogger().println("Members of a chunk job that are waiting to run.");
+            listener.getLogger().println("Members of a chunk job that "
+                    + "are waiting to run.");
+        } else {
+            listener.getLogger().println("Job status not recognized.");
         }
     }
 
@@ -121,27 +138,37 @@ public class LSF extends BatchSystem {
     }
 
     @Override
-    public void printExitCode(String jobId) throws InterruptedException, IOException {
-        Shell shell = new Shell("#!/bin/bash +x\n bjobs -l " + jobId + " > " + COMMUNICATION_FILE);
+    public void printExitCode(String jobId)
+            throws InterruptedException, IOException {
+        Shell shell = new Shell("#!/bin/bash +x\n bjobs -l "
+                + jobId + " > " + COMMUNICATION_FILE);
         shell.perform(build, launcher, fakeListener);
         copyFileToMaster.perform(build, launcher, fakeListener);
-        String exitCode = FileUtils.readFileToString(new File(build.getRootDir().getAbsolutePath() + "/" + COMMUNICATION_FILE));
+        String exitCode = FileUtils.readFileToString(
+                new File(build.getRootDir().getAbsolutePath()
+                        + "/" + COMMUNICATION_FILE));
         if (exitCode.contains("Exited with exit code ")) {
             listener.getLogger().println();
-            exitCode = exitCode.substring(exitCode.indexOf("Exited with exit code "), exitCode.length());
+            exitCode = exitCode.substring(
+                    exitCode.indexOf("Exited with exit code "),
+                    exitCode.length());
             exitCode = exitCode.substring(0, exitCode.indexOf(".") + 1);
             listener.getLogger().println(exitCode);
         }
     }
 
     @Override
-    public void createJobProgressFile(String jobId, String outputFileName) throws InterruptedException, IOException {
-        Shell shell = new Shell("#!/bin/bash +x\n bpeek " + jobId + " > " + outputFileName);
+    public void createJobProgressFile(String jobId, String outputFileName)
+            throws InterruptedException, IOException {
+        Shell shell = new Shell("#!/bin/bash +x\n bpeek "
+                + jobId + " > " + outputFileName);
         shell.perform(build, launcher, listener);
     }
 
     @Override
-    public void createFormattedRunningJobOutputFile(String outputFileName, int offset, int numberOfLines) throws InterruptedException, IOException {
+    public void createFormattedRunningJobOutputFile(String outputFileName,
+            int offset, int numberOfLines)
+            throws InterruptedException, IOException {
         // for clearing the output headers
         if (offset != 0) {
             offset = offset - 2;
@@ -149,14 +176,17 @@ public class LSF extends BatchSystem {
             offset = offset + 2;
         }
         numberOfLines = numberOfLines - 2;
-        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + offset + " " + outputFileName + " | head -n " + (numberOfLines - offset) + " > " + COMMUNICATION_FILE);
+        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + offset + " "
+                + outputFileName + " | head -n " + (numberOfLines - offset)
+                + " > " + COMMUNICATION_FILE);
         shell.perform(build, launcher, fakeListener);
-        copyFileToMaster.perform(build, launcher, fakeListener);
     }
 
     @Override
-    public void createFinishedJobOutputFile(String jobId, int offset) throws InterruptedException {
-        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + (offset - 3) + " LSFJOB_" + jobId + "/STDOUT" + " > " + COMMUNICATION_FILE);
+    public void createFinishedJobOutputFile(String jobId, int offset)
+            throws InterruptedException {
+        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + (offset - 3)
+                + " LSFJOB_" + jobId + "/STDOUT" + " > " + COMMUNICATION_FILE);
         shell.perform(build, launcher, listener);
     }
 
