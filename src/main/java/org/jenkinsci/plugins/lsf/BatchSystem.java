@@ -41,15 +41,19 @@ public abstract class BatchSystem {
     // every file created by the batch system should have this name
     protected final String COMMUNICATION_FILE;
     protected final CopyToMasterNotifier copyFileToMaster;
+    protected final String masterWorkingDirectory;
 
-    public BatchSystem(AbstractBuild<?, ?> build, Launcher launcher, 
-            BuildListener listener, String COMMUNICATION_FILE) {
+    public BatchSystem(AbstractBuild<?, ?> build, Launcher launcher,
+            BuildListener listener, String COMMUNICATION_FILE, 
+            String masterWorkingDirectory) {
         this.COMMUNICATION_FILE = COMMUNICATION_FILE;
-        this.copyFileToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE, 
-                "", true, build.getRootDir().getAbsolutePath(), true);
+        this.copyFileToMaster = new CopyToMasterNotifier(COMMUNICATION_FILE,
+                "", true, build.getProject().getRootDir().getAbsolutePath()
+                + "/workspace/", true);
         this.build = build;
         this.launcher = launcher;
         this.listener = listener;
+        this.masterWorkingDirectory = masterWorkingDirectory;
     }
 
     /**
@@ -63,7 +67,7 @@ public abstract class BatchSystem {
      * @throws InterruptedException
      * @throws IOException
      */
-    public abstract String submitJob(String jobFileName, boolean sendEmail, 
+    public abstract String submitJob(String jobFileName, boolean sendEmail,
             String queueType) throws InterruptedException, IOException;
 
     /**
@@ -72,7 +76,7 @@ public abstract class BatchSystem {
      * @throws IOException
      * @throws InterruptedException
      */
-    public abstract String getJobStatus(String jobId) 
+    public abstract String getJobStatus(String jobId)
             throws IOException, InterruptedException;
 
     /**
@@ -105,7 +109,7 @@ public abstract class BatchSystem {
      * @throws InterruptedException
      * @throws IOException
      */
-    public abstract void printExitCode(String jobId) 
+    public abstract void printExitCode(String jobId)
             throws InterruptedException, IOException;
 
     /**
@@ -116,7 +120,7 @@ public abstract class BatchSystem {
      * @throws InterruptedException
      * @throws IOException
      */
-    public abstract void createJobProgressFile(String jobId, 
+    public abstract void createJobProgressFile(String jobId,
             String outputFileName) throws InterruptedException, IOException;
 
     /**
@@ -130,7 +134,7 @@ public abstract class BatchSystem {
      * @throws InterruptedException
      */
     public abstract void createFormattedRunningJobOutputFile(
-            String outputFileName, int offset, int numberOfLines) 
+            String outputFileName, int offset, int numberOfLines)
             throws InterruptedException, IOException;
 
     /**
@@ -141,9 +145,16 @@ public abstract class BatchSystem {
      * output
      * @throws InterruptedException
      */
-    public abstract void createFinishedJobOutputFile(String jobId, int offset) 
+    public abstract void createFinishedJobOutputFile(String jobId, int offset)
             throws InterruptedException;
 
+    /**
+     * cleans up the files created by the batch system
+     * @param jobId
+     * @throws InterruptedException 
+     */
+    public abstract void cleanUpFiles(String jobId) 
+            throws InterruptedException;
     /**
      * @param jobStatus the status of the job
      * @return true if the given job status is a running status

@@ -54,8 +54,10 @@ public class LSF extends BatchSystem {
             = new BuildListenerAdapter(TaskListener.NULL);
 
     public LSF(AbstractBuild<?, ?> build, Launcher launcher,
-            BuildListener listener, String COMMUNICATION_FILE) {
-        super(build, launcher, listener, COMMUNICATION_FILE);
+            BuildListener listener, String COMMUNICATION_FILE, 
+            String masterWorkingDirectory) {
+        super(build, launcher, listener, COMMUNICATION_FILE, 
+                masterWorkingDirectory);
     }
 
     @Override
@@ -76,8 +78,7 @@ public class LSF extends BatchSystem {
         // stores the job id
         copyFileToMaster.perform(build, launcher, fakeListener);
         BufferedReader fileReader = new BufferedReader(
-                new FileReader(build.getRootDir().getAbsolutePath()
-                        + "/" + COMMUNICATION_FILE));
+                new FileReader(masterWorkingDirectory + COMMUNICATION_FILE));
         String jobId = fileReader.readLine();
         jobId = jobId.substring(jobId.indexOf('<', 0)
                 + 1, jobId.indexOf('>', 0));
@@ -92,8 +93,7 @@ public class LSF extends BatchSystem {
         shell.perform(build, launcher, fakeListener);
         copyFileToMaster.perform(build, launcher, fakeListener);
         BufferedReader fileReader = new BufferedReader(
-                new FileReader(build.getRootDir().getAbsolutePath()
-                        + "/" + COMMUNICATION_FILE));
+                new FileReader(masterWorkingDirectory + COMMUNICATION_FILE));
         fileReader.readLine();
         return fileReader.readLine().trim().split(" ")[2];
     }
@@ -145,8 +145,7 @@ public class LSF extends BatchSystem {
         shell.perform(build, launcher, fakeListener);
         copyFileToMaster.perform(build, launcher, fakeListener);
         String exitCode = FileUtils.readFileToString(
-                new File(build.getRootDir().getAbsolutePath()
-                        + "/" + COMMUNICATION_FILE));
+                new File(masterWorkingDirectory + COMMUNICATION_FILE));
         if (exitCode.contains("Exited with exit code ")) {
             listener.getLogger().println();
             exitCode = exitCode.substring(
@@ -169,8 +168,8 @@ public class LSF extends BatchSystem {
     public void createFormattedRunningJobOutputFile(String outputFileName,
             int offset, int numberOfLines)
             throws InterruptedException, IOException {
-        // for clearing the output headers
-        if (offset != 0) {
+        // for clearing the running job output headers
+        if (offset > 2) {
             offset = offset - 2;
         } else {
             offset = offset + 2;
@@ -185,9 +184,19 @@ public class LSF extends BatchSystem {
     @Override
     public void createFinishedJobOutputFile(String jobId, int offset)
             throws InterruptedException {
-        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + (offset - 3)
+        // because of the running job output headers
+        if (offset >= 3) {
+            offset = offset - 3;
+        }
+        Shell shell = new Shell("#!/bin/bash +x\n tail -n+" + offset
                 + " LSFJOB_" + jobId + "/STDOUT" + " > " + COMMUNICATION_FILE);
         shell.perform(build, launcher, listener);
+    }
+    
+    @Override
+    public void cleanUpFiles(String jobId) throws InterruptedException {
+        Shell shell = new Shell("rm -rf LSFJOB_" + jobId + " errorLog");
+        shell.perform(build, launcher, fakeListener);
     }
 
     @Override
